@@ -1,0 +1,153 @@
+---
+title: "homework5"
+author: "James(Changhwan) Han (3923257)"
+date: "5/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning = FALSE}
+# install.packages("glmnet")
+# install.packages("janitor")
+library(tidymodels)
+library(tidyverse)
+library(rlang)
+library(knitr)
+library(discrim)
+library(klaR)
+library(glmnet)
+library("janitor")
+tidymodels_prefer()
+```
+
+```{r}
+pokemon <- read_csv("Pokemon.csv")
+head(pokemon)
+```
+
+# Exercise 1
+```{r}
+pokemon <- pokemon %>% 
+  clean_names()
+head(pokemon)
+```
+1. What happened to the data? 
+  Column names are cleaned. For example, column name has changed from "#" to "number" and all the uppercase letters became lowercase letters. Also, it removes unnecessary spaces and replaces "." to "_".
+  
+2. why is clean_names() useful?
+  It cleans dirty data and make it easier to process data.
+
+# Exercise 2
+```{r}
+pokemon %>% 
+  ggplot(aes(x = type_1)) +
+  geom_bar()
+
+table(pokemon$type_1)
+unique(pokemon$type_1)
+
+# filtered_pokemon <- filter(pokemon, type_1 == "Bug" | type_1 == "Fire" | type_1 == "Grass" | type_1 == "Normal" | type_1 == "Water" | type_1 == "Psychic")
+
+df <- pokemon %>%
+  filter(type_1 %in% c("Bug", "Fire", "Grass", "Normal", "Water", "Psychic"))
+df
+
+# Converting "type_1" and "legendary" to factors
+df$type_1 <- factor(df$type_1)
+df$legendary <- factor(df$legendary)
+```
+1. How many classes of outcome are there? 
+  There are 18 classes.
+2. Are there any Pokemon types with very few Pokemon? Which ones?
+  "Flying" has only 4.
+
+# Exercise 3
+```{r}
+set.seed(1014)
+
+df_split <- initial_split(df, prop = 0.70,
+                          strata = type_1)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+dim(df_train)
+dim(df_test)
+
+df_folds <- vfold_cv(df_train, v = 5, strata = type_1)
+df_folds
+```
+1. Number of observations for training and test sets?
+  318 observations for train sets and 140 observations for test sets.
+2. Why stratifying the folds be useful?
+  If we do not split the data into different sets the model would be evaluated on the same data it has seen during training. We could avoid overfitting by stratifying sampling.
+
+# Exercise 4
+```{r}
+df_recipe <- recipe(type_1 ~ legendary + generation + sp_atk + attack + speed + defense + hp + sp_def, 
+                   data = df_train) %>%
+  step_dummy(c(legendary, generation)) %>%
+  step_normalize(all_predictors())
+```
+
+# Exercise 5
+```{r}
+tune_engine <- multinom_reg(penalty = tune(), mixture = tune()) %>% 
+  set_mode("classification") %>%
+  set_engine("glmnet")
+
+pokemon_wf <- workflow() %>%
+  add_model(tune_engine) %>%
+  add_recipe(df_recipe)
+
+penalty_grid <- grid_regular(penalty(range = c(-5,5)), mixture(range = c(0,1)), levels = 10)
+```
+1. How many total models will you be fitting when you fit these models to your folded data?
+  500 models
+
+# Exercise 6
+```{r}
+tune_res <- tune_grid(
+  pokemon_wf,
+  resamples = df_folds,
+  grid = penalty_grid
+)
+
+autoplot(tune_res)
+```
+
+# Exercise 7
+```{r}
+best_penalty <- select_best(tune_res, metrix = "roc_auc")
+final <- finalize_workflow(pokemon_wf, best_penalty)
+
+final_fit <- fit(final, data = df_train)
+
+predict(final_fit, new_data = df_test, type = "class")
+
+test_acc <- augment(final_fit, new_data = df_test) %>%
+  accuracy(truth = type_1, estimate = .pred_class)
+
+test_acc
+```
+
+# Exercise 8
+```{r}
+augment(final_fit, new_data = df_test) %>%
+  roc_auc(type_1, .pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Water, .pred_Psychic)
+
+augment(final_fit, new_data = df_test) %>%
+  roc_curve(type_1, .pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Water, .pred_Psychic) %>%
+  autoplot()
+```
+
+# Exercise 9
+```{r}
+data <- data.frame(sample(x = c(1, 0), prob = c(0.421, 0.579), size = 801, replace = TRUE))
+data
+
+fg_boot <- bootstraps(data, times = 1e3, apparent = TRUE)
+```
+
